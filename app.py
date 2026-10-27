@@ -70,7 +70,7 @@ def normalize_driver_username(value):
 DEFAULT_CONFIG = {
     'max_passengers': 40,
     'alert_at_limit': True,
-    'authority_webhook_url': '',
+    'authority_webhook_url': 'https://transport-authority-dashboard.onrender.com/api/alerts',
     'authority_api_token': '',
     'iot_mode': 'mock',
     'iot_endpoint': '',
@@ -87,6 +87,8 @@ def read_config():
             config = DEFAULT_CONFIG.copy()
     else:
         config = DEFAULT_CONFIG.copy()
+    if not str(config.get('authority_webhook_url', '')).strip():
+        config['authority_webhook_url'] = DEFAULT_CONFIG['authority_webhook_url']
     for key, env_var in (
         ('authority_webhook_url', 'AUTHORITY_WEBHOOK_URL'),
         ('authority_api_token', 'AUTHORITY_API_TOKEN')
