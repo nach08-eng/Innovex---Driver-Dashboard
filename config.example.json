@@ -1,0 +1,10 @@
+{
+  "max_passengers": 40,
+  "alert_at_limit": true,
+  "authority_webhook_url": "",
+  "authority_api_token": "",
+  "iot_mode": "mock",
+  "iot_endpoint": "",
+  "cctv_source": "",
+  "bus_id": "TN-TRANSMIT-DEMO-01"
+}

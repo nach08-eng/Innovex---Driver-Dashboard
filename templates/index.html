@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TN Transit | Smart Crowd AI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar"><div class="brand"><div class="brand-mark">TN</div><div><div class="brand-name">TN TRANSMIT</div><div class="brand-sub">SMART CROWD AI</div></div></div><div class="top-status"><span class="pulse"></span> LOCAL DASHBOARD <span class="divider">|</span> <span id="clock">--:--:--</span></div></header>
+<div class="shell">
+  <aside class="sidebar"><div class="side-label">WORKSPACE</div><a class="nav active" href="#overview">▦ &nbsp; Overview</a><a class="nav" href="#monitor">◉ &nbsp; Monitoring</a><a class="nav" href="#safety">⚠ &nbsp; Safety alerts</a><a class="nav" href="#integration">⌁ &nbsp; Integrations</a><a class="nav" href="#history">☷ &nbsp; Event history</a><div class="side-bottom"><div class="side-label">SYSTEM MODE</div><div class="mode-card"><span class="mode-dot"></span><div><b>Prototype mode</b><small>Physical controls disabled</small></div></div><p class="side-note">AI detections are estimates. Verify all safety behavior before real-world use.</p></div></aside>
+  <main class="main" id="overview">
+    <div class="page-heading"><div><div class="eyebrow">TRANSPORT INTELLIGENCE / TAMIL NADU</div><h1>Smart Crowd <span>Command Center</span></h1><p>Monitor passenger flow, identify congestion, and coordinate safety alerts.</p></div><div class="bus-chip"><span class="bus-icon">▰</span><div><small>ACTIVE VEHICLE</small><b id="bus-id">{{ config.bus_id }}</b></div><span class="status-pill">DEMO</span></div></div>
+    <div class="banner"><div class="banner-icon">✦</div><div><b>Safety-first prototype</b><p>Upload analysis and dashboard controls are available. Live AI counting, authority delivery, and physical IoT actuation require your model, API details, and hardware interface.</p></div><button class="banner-close" id="dismiss-banner" aria-label="Dismiss">×</button></div>
+    <section class="authority-notification hidden" id="authority-notification" role="status" aria-live="polite"><span class="authority-notification-icon" id="authority-notification-icon" aria-hidden="true">i</span><div><b id="authority-notification-title">Transport authority update</b><p id="authority-notification-message">Waiting for the transport authority.</p><small id="authority-notification-time"></small></div></section>
+    <section class="metrics"><article class="metric"><div class="metric-top"><span>PASSENGERS ON BOARD</span><span class="metric-icon blue">♙</span></div><div class="metric-value" id="occupancy">—</div><div class="metric-foot">Waiting for analyzed footage</div></article><article class="metric"><div class="metric-top"><span>ENTRY COUNT</span><span class="metric-icon green">↘</span></div><div class="metric-value" id="entries">—</div><div class="metric-foot">Requires tracking + entry line</div></article><article class="metric"><div class="metric-top"><span>EXIT COUNT</span><span class="metric-icon violet">↗</span></div><div class="metric-value" id="exits">—</div><div class="metric-foot">Requires tracking + exit line</div></article><article class="metric"><div class="metric-top"><span>CROWD STATUS</span><span class="metric-icon orange">⌁</span></div><div class="metric-value small-value" id="crowd-status">NOT ANALYZED</div><div class="metric-foot" id="limit-caption">Configured limit: {{ config.max_passengers }}</div></article></section>
+    <div class="content-grid">
+      <section class="panel monitor-panel" id="monitor"><div class="panel-heading"><div><h2>Video monitoring</h2><p>Analyze a recorded clip or prepare a live source</p></div><span class="live-tag"><span></span> INPUT SELECTOR</span></div>
+        <div class="tabs"><button class="tab active" data-tab="video">Upload video</button><button class="tab" data-tab="image">Upload image</button><button class="tab" data-tab="live">Live CCTV</button></div>
+        <div id="upload-pane" class="upload-pane"><div class="dropzone" id="dropzone"><div class="upload-symbol">↑</div><h3>Choose footage to analyze</h3><p>MP4, AVI, MOV, MKV, WEBM · Images: JPG, PNG · Max 500 MB</p><input id="media-file" type="file" accept="video/*,.mkv,image/jpeg,image/png" hidden><button class="primary-btn" id="choose-file">Browse files</button><div class="selected-file" id="selected-file">No file selected</div></div><div class="upload-progress" id="upload-progress"><div class="progress-bar"><span></span></div><small id="upload-message"></small></div></div>
+        <div id="live-pane" class="live-pane hidden"><div class="live-placeholder"><div class="camera-symbol">◎</div><b>Live CCTV source</b><p>Enter a supported camera URL in Settings. The browser cannot directly access every CCTV/RTSP stream; a backend stream bridge may be needed.</p><button class="secondary-btn" id="go-settings">Configure source</button></div></div>
+        <div class="preview-wrap"><div class="preview-head"><b>Selected media</b><span id="preview-type">NO MEDIA</span></div><div id="media-preview" class="media-preview"><div class="empty-preview"><span>▧</span><p>Uploaded media preview will appear here</p></div></div></div>
+        <div class="panel-actions"><button class="primary-btn" id="upload-btn">Upload file</button><button class="primary-btn" id="analyze-btn" disabled>Analyse media</button><span class="muted" id="analysis-status">Choose media, upload it, then analyse</span></div>
+        <div id="analysis-results" class="analysis-results hidden" aria-live="polite"></div>
+        <div class="notice">YOLO person detections are estimates. Peak people visible in a frame is not the same as verified onboard occupancy. Entry/exit counting and door-obstruction detection need calibrated zones and tracking.</div>
+      </section>
+      <section class="panel settings-panel" id="safety"><div class="panel-heading"><div><h2>Crowd & safety rules</h2><p>Configure prototype thresholds</p></div><span class="gear">⚙</span></div>
+        <label class="field-label" for="passenger-limit">Maximum passenger limit</label><div class="number-control"><input type="number" min="1" max="1000" id="passenger-limit" value="{{ config.max_passengers }}"><span>PEOPLE</span></div><p class="field-help">Set the approved limit for your particular vehicle. Do not assume one limit fits all bus models.</p>
+        <label class="field-label" for="bus-input">Vehicle / bus ID</label><input class="text-input" id="bus-input" value="{{ config.bus_id }}" maxlength="80">
+        <div class="toggle-row"><div><b>Overcrowding announcements</b><small>English and Tamil browser voice</small></div><label class="switch"><input type="checkbox" id="announcements" checked><span></span></label></div>
+        <div class="toggle-row"><div><b>Authority alert logging</b><small>Logs locally until API is configured</small></div><label class="switch"><input type="checkbox" id="authority-logging" checked><span></span></label></div>
+        <button class="primary-btn full-btn" id="save-settings">Save settings</button><div class="inline-result" id="settings-result"></div>
+        <div class="rule-separator"></div><div class="section-mini-title">QUICK SAFETY TESTS</div><button class="safety-action" id="test-crowd"><span class="action-icon orange-bg">!</span><span><b>Test announcement audio</b><small>Plays a clearly labelled test phrase only</small></span><span class="chevron">›</span></button><button class="safety-action" id="test-door"><span class="action-icon red-bg">⌑</span><span><b>Test door-warning audio</b><small>Audio test only; does not claim an obstruction was detected</small></span><span class="chevron">›</span></button><button class="safety-action" id="test-iot"><span class="action-icon blue-bg">⌁</span><span><b>Test IoT connection</b><small>Mock test; no physical door command</small></span><span class="chevron">›</span></button>
+      </section>
+    </div>
+    <section class="panel integration-panel" id="integration"><div class="panel-heading"><div><h2>Connected systems</h2><p>Configure links to the external authority website and IoT device</p></div><span class="integration-count">3 INTEGRATIONS</span></div><div class="integration-cards"><article class="integration-card"><div class="integration-head"><span class="integration-icon purple-bg">⌘</span><span class="connection-badge pending" id="authority-state">NOT CONFIGURED</span></div><h3>Transport authority website</h3><p>Send structured event alerts to your existing website through its documented API/webhook.</p><label class="field-label" for="webhook-url">Webhook / API endpoint</label><input class="text-input" id="webhook-url" placeholder="https://your-site.example/api/alerts" value="{{ config.authority_webhook_url }}"><label class="field-label" for="api-token">API token (optional)</label><input class="text-input" type="password" id="api-token" placeholder="Stored server-side; never expose in frontend"><button class="secondary-btn full-btn" id="save-authority">Save authority endpoint</button></article><article class="integration-card"><div class="integration-head"><span class="integration-icon red-bg">▣</span><span class="connection-badge pending" id="iot-state">MOCK MODE</span></div><h3>IoT door controller</h3><p>Integration adapter placeholder. Need your exact controller model, protocol, and safety input/output definitions.</p><label class="field-label" for="iot-mode">Integration mode</label><select class="text-input" id="iot-mode"><option value="mock" {% if config.iot_mode == 'mock' %}selected{% endif %}>Mock / simulation (safe default)</option><option value="http" {% if config.iot_mode == 'http' %}selected{% endif %}>HTTP API (not activated)</option><option value="mqtt" {% if config.iot_mode == 'mqtt' %}selected{% endif %}>MQTT (not activated)</option><option value="serial" {% if config.iot_mode == 'serial' %}selected{% endif %}>Serial controller (not activated)</option></select><label class="field-label" for="iot-endpoint">Device endpoint / broker / port</label><input class="text-input" id="iot-endpoint" value="{{ config.iot_endpoint }}" placeholder="Device-specific configuration"><button class="secondary-btn full-btn" id="save-iot">Save IoT settings</button><small class="caution">No real door-close command is implemented. The physical safety interlock must independently prevent closing on obstruction.</small></article><article class="integration-card"><div class="integration-head"><span class="integration-icon green-bg">◉</span><span class="connection-badge pending" id="cctv-state">NOT CONFIGURED</span></div><h3>CCTV / camera source</h3><p>Use a backend-compatible camera URL. RTSP streams often need a local stream bridge; do not expose camera credentials publicly.</p><label class="field-label" for="cctv-source">Camera source / URL</label><input class="text-input" id="cctv-source" value="{{ config.cctv_source }}" placeholder="0 for local webcam, or supported stream URL"><button class="secondary-btn full-btn" id="save-cctv">Save camera source</button></article></div><div class="panel" id="driver-report">
+        <div class="panel-head"><div><h2>Driver incident report</h2><p>Manual report for crowding, health and vehicle issues</p></div><span class="tag">DRIVER CHANNEL</span></div>
+        <form id="reportForm" class="form-grid">
+          <label>Vehicle ID<input id="reportVehicle" placeholder="e.g. TN-TRANSMIT-DEMO-01" required></label>
+          <label>Route<input id="reportRoute" placeholder="e.g. Route 21G" required></label>
+          <label>Incident type<select id="reportType"><option value="crowd">Crowd / passenger surge</option><option value="overcrowding">Overcrowding</option><option value="medical_emergency">Driver medical emergency</option><option value="driver_injured">Driver injured</option><option value="vehicle_breakdown">Vehicle breakdown</option><option value="safety_threat">Safety threat</option><option value="door_obstruction">Door obstruction</option><option value="other">Other incident</option></select></label>
+          <label>Severity<select id="reportSeverity"><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical / urgent</option><option value="low">Low</option></select></label>
+          <label>Stop / location<input id="reportLocation" placeholder="Bus stop, landmark or location"></label>
+          <label>Current passenger count<input id="reportOccupancy" type="number" min="0" placeholder="Optional"></label>
+          <label class="full">Details<textarea id="reportMessage" rows="3" placeholder="Describe what happened and what assistance is needed"></textarea></label>
+          <button class="btn primary full" type="submit">Send report to authority</button>
+          <p id="reportMsg" class="form-msg full" role="status" aria-live="polite"></p>
+        </form>
+        <p class="safety-note">For a real medical emergency, also use the transport operator's approved emergency channel. This prototype is not an emergency service.</p>
+      </div></section>
+    <section class="panel history-panel" id="history"><div class="panel-heading"><div><h2>Recent event history</h2><p>Uploads, configuration changes, and test alerts</p></div><div class="history-actions"><button class="secondary-btn" id="refresh-events">Refresh</button><button class="secondary-btn danger-btn" id="clear-events">Clear all history</button></div></div><div class="event-list" id="event-list">{% for event in events %}<div class="event-row"><span class="event-dot {{ event.level }}"></span><div class="event-copy"><b>{{ event.message }}</b><small>{{ event.type }} · {{ event.timestamp }}</small></div><span class="event-level {{ event.level }}">{{ event.level|upper }}</span><button class="event-delete" data-delete-event="{{ event.id }}" title="Delete this event" aria-label="Delete event {{ event.type }}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></svg></button></div>{% else %}<div class="empty-events">No events yet. Upload a clip or run a safety test.</div>{% endfor %}</div></section>
+    
+<section class="panel" id="alert-logs">
+    <div class="panel-head">
+        <div>
+            <h2>Alert Submission Logs</h2>
+            <p>Successful reports and failed delivery attempts</p>
+        </div>
+        <button class="btn secondary" onclick="loadAlertLogs()">
+            Refresh logs
+        </button>
+    </div>
+
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Date / Time</th>
+                    <th>Vehicle</th>
+                    <th>Incident</th>
+                    <th>Result</th>
+                    <th>Error details</th>
+                </tr>
+            </thead>
+            <tbody id="alertLogRows">
+                <tr>
+                    <td colspan="5">Loading logs...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
+    <footer>TN Transit Smart Crowd AI · Prototype dashboard · Verify all detections and physical safety controls before deployment.</footer>
+  </main>
+</div>
+<div class="toast" id="toast" role="status"></div><script src="{{ url_for('static', filename='app.js') }}"></script>
+</body></html>
