@@ -93,7 +93,7 @@ Use the trash icon on a row to remove one event or **Clear all history** to remo
 
 ### Driver incident reports
 
-The Webhook / API endpoint defaults to `https://transport-authority-dashboard.onrender.com/api/alerts`; this is the authority dashboard's POST-only alert API, not its homepage. On Render, set `AUTHORITY_WEBHOOK_URL` to this endpoint to override deployment-specific config. Add `AUTHORITY_API_TOKEN` only if the authority requires one. Driver accounts cannot change these settings. The webhook receives incident reports and driver status updates; delivery results are logged, and a driver status remains visible in the shared feed even if authority forwarding fails.
+The Webhook / API endpoint defaults to `https://transport-authority-dashboard.onrender.com/api/alerts`; this is the authority dashboard's POST-only alert API, not its homepage. Reports include `callback_url`, which points back to the driver's bus-allocation callback. The authority endpoint currently rejects callbacks unless their HTTPS host is in its `DRIVER_STATUS_CALLBACK_HOSTS` allowlist. Add `tn-transmit-smart-crowd-ai.onrender.com` to that environment variable on the transport-authority Render service before reports can be accepted. On this app's Render service, set `AUTHORITY_WEBHOOK_URL` to the endpoint to override deployment-specific config. Add `AUTHORITY_API_TOKEN` only if the authority requires one. Driver accounts cannot change these settings. The webhook receives incident reports and driver status updates; delivery results are logged, and a driver status remains visible in the shared feed even if authority forwarding fails.
 
 ### Driver account and shared update API
 

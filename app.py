@@ -75,7 +75,11 @@ DEFAULT_CONFIG = {
     'iot_mode': 'mock',
     'iot_endpoint': '',
     'cctv_source': '',
-    'bus_id': 'TN-TRANSMIT-DEMO-01'
+    'bus_id': 'TN-TRANSMIT-DEMO-01',
+    'driver_status_callback_url': os.environ.get(
+        'DRIVER_STATUS_CALLBACK_URL',
+        'https://tn-transmit-smart-crowd-ai.onrender.com/api/authority/bus-allocation'
+    ).strip()
 }
 
 def read_config():
@@ -91,7 +95,8 @@ def read_config():
         config['authority_webhook_url'] = DEFAULT_CONFIG['authority_webhook_url']
     for key, env_var in (
         ('authority_webhook_url', 'AUTHORITY_WEBHOOK_URL'),
-        ('authority_api_token', 'AUTHORITY_API_TOKEN')
+        ('authority_api_token', 'AUTHORITY_API_TOKEN'),
+        ('driver_status_callback_url', 'DRIVER_STATUS_CALLBACK_URL')
     ):
         if os.environ.get(env_var):
             config[key] = os.environ[env_var].strip()
@@ -691,6 +696,7 @@ def forward_driver_update(update_id, username, display_name, bus_id, route,
     payload = {
         'event_type': 'driver_status_update',
         'source': 'driver_portal',
+        'callback_url': str(config.get('driver_status_callback_url') or '').strip(),
         'update_id': update_id,
         'driver_username': username,
         'driver_name': display_name,
@@ -715,6 +721,9 @@ def forward_driver_update(update_id, username, display_name, bus_id, route,
             response_body = response.read(500).decode('utf-8', errors='replace')
             if not 200 <= response.status < 300:
                 return 'FAILED', f'Authority returned HTTP {response.status}: {response_body}'
+    except urllib.error.HTTPError as error:
+        response_body = error.read(1000).decode('utf-8', errors='replace').strip()
+        return 'FAILED', f'Authority returned HTTP {error.code}: {response_body or error.reason}'
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
         return 'FAILED', f'{type(error).__name__}: {error}'
     return 'DELIVERED', ''
@@ -799,7 +808,11 @@ def driver_report():
 
     # Attempt delivery to the configured authority endpoint.
     try:
-        body = json.dumps(payload).encode('utf-8')
+        authority_payload = {
+            **payload,
+            'callback_url': cfg['driver_status_callback_url']
+        }
+        body = json.dumps(authority_payload).encode('utf-8')
         headers = {'Content-Type': 'application/json'}
 
         if token:
@@ -837,6 +850,22 @@ def driver_report():
             message='Authority endpoint accepted the report.'
         ), 200
 
+    except urllib.error.HTTPError as exc:
+        response_body = exc.read(1000).decode('utf-8', errors='replace').strip()
+        error = f'HTTPError: HTTP {exc.code}: {response_body or exc.reason}'
+        alert_id = save_alert_log(payload, 'FAILED', error)
+        log_event(
+            'driver_report_failed',
+            'Driver report was rejected by the authority endpoint.',
+            'warning',
+            {'alert_id': alert_id, 'error': error}
+        )
+        return jsonify(
+            ok=False,
+            saved_locally=True,
+            alert_id=alert_id,
+            error='Report saved locally, but authority delivery failed: ' + error
+        ), 502
     except Exception as exc:
         error = f'{type(exc).__name__}: {str(exc)}'
         alert_id = save_alert_log(payload, 'FAILED', error)

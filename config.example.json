@@ -3,6 +3,7 @@
   "alert_at_limit": true,
   "authority_webhook_url": "https://transport-authority-dashboard.onrender.com/api/alerts",
   "authority_api_token": "",
+  "driver_status_callback_url": "https://tn-transmit-smart-crowd-ai.onrender.com/api/authority/bus-allocation",
   "iot_mode": "mock",
   "iot_endpoint": "",
   "cctv_source": "",
