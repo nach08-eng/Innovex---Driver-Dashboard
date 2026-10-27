@@ -5,3 +5,4 @@ config.json
 events.jsonl
 uploads/*
 outputs/*
+tn_transmit.db

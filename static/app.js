@@ -3,8 +3,8 @@ let selectedFile = null;
 let selectedTab = 'video';
 let toastTimer;
 let uploadedFilename = null;
-let knownAllocationIds = new Set();
-let initialAllocationCheck = true;
+let latestDriverUpdateId = 0;
+let driverFeedInitialized = false;
 function toast(message){const el=$('toast');el.textContent=message;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),3500)}
 function updateClock(){ $('clock').textContent = new Date().toLocaleTimeString(); }
 updateClock(); setInterval(updateClock,1000);
@@ -29,6 +29,13 @@ async function postJSON(url,data){const r=await fetch(url,{method:'POST',headers
 $('save-settings').addEventListener('click',async()=>{try{const d=await postJSON('/api/settings',{max_passengers:$('passenger-limit').value,bus_id:$('bus-input').value,alert_at_limit:true});$('limit-caption').textContent='Configured limit: '+d.config.max_passengers;$('bus-id').textContent=d.config.bus_id;$('settings-result').textContent='Settings saved.';toast('Settings saved');await refreshEvents()}catch(e){$('settings-result').textContent=e.message;toast(e.message)}});
 async function saveIntegration(button,fields){try{const data={max_passengers:$('passenger-limit').value,bus_id:$('bus-input').value};for(const [key,id] of Object.entries(fields)){const value=$(id).value;if(key!=='authority_api_token'||value.trim())data[key]=value}await postJSON('/api/settings',data);if(fields.authority_api_token)$('api-token').value='';toast('Integration settings saved');await refreshStatus();await refreshEvents()}catch(e){toast(e.message)}}
 $('save-authority').addEventListener('click',()=>saveIntegration(null,{authority_webhook_url:'webhook-url',authority_api_token:'api-token'}));
+$('save-authority').disabled=true;
+$('webhook-url').readOnly=true;
+$('api-token').disabled=true;
+const authorityConfigNote=document.createElement('small');
+authorityConfigNote.className='caution';
+authorityConfigNote.textContent='Managed by the transport authority in Render environment variables; drivers cannot change this endpoint or token.';
+$('save-authority').before(authorityConfigNote);
 $('save-iot').addEventListener('click',()=>saveIntegration(null,{iot_mode:'iot-mode',iot_endpoint:'iot-endpoint'}));
 $('save-cctv').addEventListener('click',()=>saveIntegration(null,{cctv_source:'cctv-source'}));
 function speakBilingual(en,ta){if(!$('announcements').checked){toast('Announcements are disabled in settings');return}if(!('speechSynthesis'in window)){toast('Browser text-to-speech is unavailable on this device');return}speechSynthesis.cancel();const first=new SpeechSynthesisUtterance(en);first.lang='en-IN';first.rate=.92;const second=new SpeechSynthesisUtterance(ta);second.lang='ta-IN';second.rate=.88;first.onend=()=>speechSynthesis.speak(second);speechSynthesis.speak(first)}
@@ -42,37 +49,88 @@ $('clear-events').addEventListener('click',async()=>{if(!confirm('Clear all even
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function refreshStatus(){try{const r=await fetch('/api/status');if(!r.ok)throw new Error(`Could not load integration status (HTTP ${r.status})`);const d=await r.json();$('authority-state').textContent=d.authority_configured?'ENDPOINT SAVED':'NOT CONFIGURED';$('authority-state').classList.toggle('ready',d.authority_configured);$('iot-state').textContent=d.iot_mode.toUpperCase()+' MODE';$('cctv-state').textContent=d.cctv_configured?'SOURCE SAVED':'NOT CONFIGURED';$('cctv-state').classList.toggle('ready',d.cctv_configured)}catch(e){console.error(e);toast(e.message)}}
 $('refresh-events').addEventListener('click',refreshEvents);refreshStatus();
-async function checkAuthorityAllocations(){
+const driverStatusLabels={on_the_way:'On the way',at_stop:'At stop',delayed:'Delayed',needs_assistance:'Needs assistance',situation:'Situation update',allocated:'Bus allocated',not_allocated:'Bus not allocated'};
+async function refreshDriverUpdates(){
   try{
-    const response=await fetch('/api/authority/allocations',{cache:'no-store'});
-    if(!response.ok)throw new Error(`Authority notification check failed (HTTP ${response.status})`);
+    const response=await fetch('/api/driver/updates',{cache:'no-store'});
+    if(response.status===401){window.location.assign('/login');return}
+    if(!response.ok)throw new Error(`Driver update check failed (HTTP ${response.status})`);
     const data=await response.json();
-    const updates=Array.isArray(data.events)?data.events:[];
-    if(!updates.length){initialAllocationCheck=false;return}
-    const unseen=updates.filter(event=>!knownAllocationIds.has(event.id));
-    updates.forEach(event=>knownAllocationIds.add(event.id));
-    showAuthorityAllocation(updates[0]);
-    if(!initialAllocationCheck&&unseen.length){
-      const newest=unseen[0];
-      toast(newest.type==='authority_bus_allocated'
-        ? `Transport authority: bus allocated${newest.details.bus_id?` (${newest.details.bus_id})`:''}.`
-        : `Transport authority: bus not allocated${newest.details.bus_id?` (${newest.details.bus_id})`:''}.`);
+    const updates=Array.isArray(data.updates)?data.updates:[];
+    const feed=$('driver-update-feed');
+    feed.innerHTML=updates.length?updates.map(update=>{
+      const label=update.kind==='bus_allocation'
+        ? driverStatusLabels[update.status]||'Authority update'
+        : driverStatusLabels[update.status]||'Driver update';
+      const delivery=update.kind==='driver_status'
+        ? `<span class="delivery-state ${esc(update.authority_delivery)}" title="${esc(update.authority_error||'')}">Authority: ${esc(update.authority_delivery)}</span>`
+        : '<span class="delivery-state">Transport authority</span>';
+      return `<article class="driver-update-item ${update.kind==='bus_allocation'?'authority-update':''}"><div class="driver-update-item-head"><b>${esc(label)}</b><time>${esc(new Date(update.created_at).toLocaleString())}</time></div><p>${esc(update.message)}</p><small>${esc(update.actor_display_name)}${update.actor_username?` · @${esc(update.actor_username)}`:''}</small>${delivery}</article>`;
+    }).join(''):'<div class="empty-events">No driver or authority updates yet.</div>';
+    const newestId=updates.reduce((max,update)=>Math.max(max,Number(update.id)||0),0);
+    if(!driverFeedInitialized){
+      latestDriverUpdateId=newestId;
+      driverFeedInitialized=true;
+    }else{
+      const unseen=updates.filter(update=>Number(update.id)>latestDriverUpdateId);
+      if(unseen.length){
+        const newest=unseen[0];
+        if(newest.kind==='bus_allocation')showAuthorityAllocation(newest);
+        toast(`${newest.actor_display_name}: ${driverStatusLabels[newest.status]||'New update'}`);
+      }
+      latestDriverUpdateId=Math.max(latestDriverUpdateId,newestId);
     }
-    initialAllocationCheck=false;
+    const latestAllocation=updates.find(update=>update.kind==='bus_allocation');
+    if(latestAllocation&&!$('authority-notification').classList.contains('allocated')&&!$('authority-notification').classList.contains('not-allocated')){
+      showAuthorityAllocation(latestAllocation);
+    }
   }catch(error){console.error(error)}
 }
-function showAuthorityAllocation(event){
-  const allocated=event.type==='authority_bus_allocated';
+function showAuthorityAllocation(update){
+  const allocated=update.status==='allocated';
   const notification=$('authority-notification');
   notification.classList.remove('hidden','allocated','not-allocated');
   notification.classList.add(allocated?'allocated':'not-allocated');
   $('authority-notification-icon').textContent=allocated?'✓':'!';
   $('authority-notification-title').textContent=allocated?'Bus allocated by transport authority':'Bus not allocated by transport authority';
-  $('authority-notification-message').textContent=event.message;
-  $('authority-notification-time').textContent=`Received ${new Date(event.timestamp).toLocaleString()}`;
+  $('authority-notification-message').textContent=update.message;
+  $('authority-notification-time').textContent=`Received ${new Date(update.created_at).toLocaleString()}`;
 }
-checkAuthorityAllocations();
-setInterval(checkAuthorityAllocations,10000);
+refreshDriverUpdates();
+setInterval(refreshDriverUpdates,8000);
+$('driverUpdateForm').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const form=event.currentTarget;
+  const button=form.querySelector('button[type="submit"]');
+  const result=$('driverUpdateResult');
+  button.disabled=true;
+  result.textContent='Sharing your status with the authority and other drivers…';
+  result.classList.remove('update-error');
+  try{
+    const response=await fetch('/api/driver/updates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      status:$('driverUpdateStatus').value,
+      location:$('driverUpdateLocation').value.trim(),
+      message:$('driverUpdateMessage').value.trim()
+    })});
+    const data=await response.json();
+    if(response.status===401){window.location.assign('/login');return}
+    if(!response.ok)throw new Error(data.error||`Could not share update (HTTP ${response.status})`);
+    if(data.authority_delivery==='DELIVERED'){
+      result.textContent='Update shared with all logged-in drivers and accepted by the authority.';
+    }else if(data.authority_delivery==='NOT_CONFIGURED'){
+      result.textContent='Update shared with all logged-in drivers, but NOT sent to the authority: configure its webhook.';
+      result.classList.add('update-error');
+    }else{
+      result.textContent=`Update shared with all logged-in drivers, but authority delivery failed: ${data.authority_error||'check the webhook configuration.'}`;
+      result.classList.add('update-error');
+    }
+    form.reset();
+    await refreshDriverUpdates();
+  }catch(error){
+    result.textContent=error.message;
+    result.classList.add('update-error');
+  }finally{button.disabled=false}
+});
 
 $('reportForm').addEventListener('submit', async (e) => {
     e.preventDefault();

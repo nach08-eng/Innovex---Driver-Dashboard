@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Driver sign in | TN Transmit</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='driver.css') }}">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="brand-mark">TN</div>
+    <div class="eyebrow">TN TRANSMIT / DRIVER PORTAL</div>
+    <h1>Driver sign in</h1>
+    <p>Use the username and password provided by your transport authority.</p>
+    {% if error %}<div class="login-error" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="{{ url_for('driver_login') }}">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required autofocus>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+    <small>Contact the transport authority if you need a driver account.</small>
+  </main>
+</body>
+</html>

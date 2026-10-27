@@ -22,27 +22,31 @@ If PowerShell blocks activation, run commands directly using `\.venv\Scripts\pyt
 ```powershell
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+$env:AUTHORITY_CALLBACK_TOKEN = "set-a-long-random-secret"
+$env:FLASK_SECRET_KEY = "set-a-different-long-random-secret"
 python app.py
 ```
 
-5. Open `http://127.0.0.1:5000` in your browser.
+5. In another PowerShell window, use the same callback token to provision a driver via `/api/authority/drivers`, then open `http://127.0.0.1:5000` and sign in. The account creation request is documented below.
 
 ## Deploy on Render
 
 1. Push this project to a Git repository. Keep `models/yolov8n.onnx` in the repository; Render needs the model to analyze media.
 2. In Render, choose **New > Blueprint** and select the repository containing `render.yaml`. Render will install `requirements.txt`, start Gunicorn, and check `/health`.
-3. When the deployment finishes, open the service URL. The free service uses ephemeral storage: uploaded media, analysis outputs, event history, and saved settings can be lost when the service restarts or redeploys.
-4. To retain that data, attach a Render persistent disk and set the service environment variable `DATA_DIR` to its mount path (for example, `/var/data`). Persistent disks are not available on Render's free web-service plan.
+3. Configure the `AUTHORITY_CALLBACK_TOKEN` when Render prompts for it. The Blueprint generates a persistent `FLASK_SECRET_KEY` and enables secure session cookies.
+4. When the deployment finishes, open the service URL. Driver accounts, updates, event history, uploads, analysis outputs and saved settings are stored under `DATA_DIR`; Render's free service uses ephemeral storage, so they can be lost on restart or redeploy.
+5. To retain accounts and operational data, use a Render plan that supports a persistent disk and set `DATA_DIR` to its mount path (for example, `/var/data`).
 
-The app is publicly reachable when deployed. It is a prototype without user authentication; use test data only and do not enter real API tokens or sensitive operational data. Do not use it as a certified passenger-safety system or connect it directly to door actuation.
+The dashboard requires a driver login. The external transport authority provisions driver accounts through the authenticated API described below. Keep the authority callback token and session secret private. This is a prototype, not a certified passenger-safety system; do not connect it directly to door actuation.
 
 ## What is implemented
 
 - Responsive dashboard UI.
 - Upload and preview common video/image files.
-- Save configuration for passenger limit, vehicle ID, CCTV source, IoT mode/endpoint, and authority endpoint.
-- Local event log and API endpoints: `/api/status`, `/api/settings`, `/api/upload`, `/api/alert`, `/api/iot/test`, `/api/events`, `/api/authority/bus-allocation`, `/api/authority/allocations`, `/health`.
+- Save configuration for passenger limit, vehicle ID, CCTV source, and IoT mode/endpoint; set the authority webhook URL/token as Render environment variables.
+- Local event log and API endpoints: `/api/status`, `/api/settings`, `/api/upload`, `/api/alert`, `/api/iot/test`, `/api/events`, `/api/authority/drivers`, `/api/authority/bus-allocation`, `/api/authority/allocations`, `/api/driver/updates`, `/health`.
 - In-app transport authority notifications for bus allocated and not allocated decisions (polled while the dashboard is open).
+- Authority-provisioned driver accounts, secure password hashes, driver login/logout, status updates shared with all logged-in drivers, and authority webhook delivery status.
 - Browser-based English and Tamil announcement test buttons.
 - IoT test is mock-only; it does not issue a door movement command.
 
@@ -52,7 +56,7 @@ The app is publicly reachable when deployed. It is a prototype without user auth
 2. Person tracking with unique track IDs and calibrated entry/exit lines.
 3. Reliable occupancy calculation (entry/exit counts alone need a known initial occupancy and reset/reconciliation logic).
 4. Door-step obstruction sensor and hardware feedback.
-5. Outbound delivery to the authority website still needs its API contract. Inbound bus-allocation notifications are ready for authority webhook integration; configure `AUTHORITY_CALLBACK_TOKEN` and have the authority POST allocation decisions to `/api/authority/bus-allocation`.
+5. Outbound delivery to the authority website requires its API contract. Set `AUTHORITY_WEBHOOK_URL` and (if needed) `AUTHORITY_API_TOKEN`; the endpoint must accept the documented driver-status JSON payload.
 6. Real CCTV stream ingestion. Browser support varies; RTSP normally requires backend access and may need a stream bridge.
 7. Real IoT protocol adapter. Obtain the device make/model, protocol, wiring/interface and documented API. Do not connect a relay or motor to an unverified endpoint.
 
@@ -89,11 +93,25 @@ Use the trash icon on a row to remove one event or **Clear all history** to remo
 
 ### Driver incident reports
 
-Configure the authority's report API in **Connected systems** using its webhook/API endpoint and optional bearer token, then submit reports from **Driver incident report**. The report is sent to this app's server first, which forwards it to the configured endpoint and logs delivery results. On Render, set `AUTHORITY_WEBHOOK_URL` and (if required) `AUTHORITY_API_TOKEN` as service environment variables to keep the endpoint and token available across deploys. The authority endpoint must accept a JSON `POST` containing the report fields; test its expected payload and authentication with the authority before relying on delivery. A report that cannot be forwarded is saved locally and explicitly marked as not delivered.
+The transport authority configures `AUTHORITY_WEBHOOK_URL` and (if required) `AUTHORITY_API_TOKEN` as Render environment variables; driver accounts cannot change these settings. The webhook receives incident reports and driver status updates. It must accept both JSON payload types and the bearer-token authentication configured by the authority. Delivery results are logged, and a driver status remains visible in the shared feed even if authority forwarding fails.
+
+### Driver account and shared update API
+
+The transport authority provisions driver accounts over HTTPS:
+
+```http
+POST https://<your-render-service>/api/authority/drivers
+Authorization: Bearer <AUTHORITY_CALLBACK_TOKEN>
+Content-Type: application/json
+```
+
+with JSON such as `{"username":"driver01","password":"<12+ character unique password>","display_name":"Driver One"}`. Passwords are stored as hashes; credentials are never returned by the API. Drivers sign in at the Render service root, then post updates using their authenticated dashboard session. Supported statuses are `on_the_way`, `at_stop`, `delayed`, `needs_assistance`, and `situation`; a location is required for `at_stop`. Updates are shared to every logged-in driver and forwarded to the configured authority webhook.
 
 ### Transport authority bus-allocation notifications
 
-The dashboard checks for allocation updates every 10 seconds while it is open and shows the latest decision, whether the bus was allocated or not. To connect the transport authority, set a strong `AUTHORITY_CALLBACK_TOKEN` environment variable on Render and configure the authority's server to send:
+The dashboard requires driver login and polls a persistent, shared update feed every 8 seconds while open. Use the `AUTHORITY_CALLBACK_TOKEN` Render secret for both account provisioning and assignment callbacks.
+
+To assign a bus, send:
 
 ```http
 POST https://<your-render-service>/api/authority/bus-allocation
@@ -101,7 +119,9 @@ Authorization: Bearer <AUTHORITY_CALLBACK_TOKEN>
 Content-Type: application/json
 ```
 
-with JSON such as `{"status":"allocated","bus_id":"TN-TRANSMIT-01","route":"21G","message":"Assigned","allocation_id":"A-123"}`. Use `"status":"not_allocated"` for a denial/no-bus decision. `bus_id`, `route`, `message`, and `allocation_id` are optional; when omitted, the configured bus ID is used. The callback rejects missing/invalid authentication and invalid status values. The authority must send a callback for both outcomes. This dashboard notification is not delivered if the website is closed, and Render's free service may lose event history after restart unless persistent storage is configured.
+with JSON such as `{"status":"allocated","driver_username":"driver01","bus_id":"TN-TRANSMIT-01","route":"21G","message":"Assigned","allocation_id":"A-123"}`. Use `"status":"not_allocated"` for the no-assignment decision; `driver_username` can identify the driver affected. `bus_id`, `route`, `message`, and `allocation_id` are optional. An allocated driver must already have an account. The callback rejects invalid authentication, status values, and unknown driver accounts.
+
+Drivers can post status/location/situation updates from the dashboard. Each update is persisted and visible to all logged-in drivers. The app forwards it to `AUTHORITY_WEBHOOK_URL` as JSON with `event_type: "driver_status_update"`; it records whether the authority accepted the request or delivery failed. Configure that endpoint to accept this event schema and bearer token before relying on authority receipt. The driver feed updates while each dashboard is open; it is not a push notification when the browser is closed. Use persistent Render storage or driver accounts and updates will be lost on restart.
 
 ### Safety note
 
