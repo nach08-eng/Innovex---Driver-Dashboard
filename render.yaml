@@ -9,6 +9,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
+      - key: DATABASE_URL
+        sync: false
       - key: FLASK_SECRET_KEY
         generateValue: true
       - key: SESSION_COOKIE_SECURE

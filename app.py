@@ -12,6 +12,8 @@ import sqlite3
 import time
 import threading
 from contextlib import contextmanager
+import psycopg
+from psycopg.rows import dict_row
 
 BASE = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get('DATA_DIR', str(BASE))).expanduser()
@@ -109,23 +111,121 @@ def log_event(event_type, message, level='info', details=None):
         'type': event_type, 'message': message, 'level': level,
         'details': details or {}
     }
-    with EVENTS_PATH.open('a', encoding='utf-8') as f:
-        f.write(json.dumps(event, ensure_ascii=False) + '\n')
+    with database_connection() as conn:
+        conn.execute("""
+            INSERT INTO events (event_id, timestamp, event_type, message, level, details)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            event['id'], event['timestamp'], event['type'], event['message'],
+            event['level'], json.dumps(event['details'], ensure_ascii=False)
+        ))
     return event
 
 def write_events(rows):
-    with EVENTS_PATH.open('w', encoding='utf-8') as f:
+    with database_connection() as conn:
+        conn.execute('DELETE FROM events')
         for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + '\n')
+            conn.execute("""
+                INSERT INTO events (event_id, timestamp, event_type, message, level, details)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                str(row.get('id', uuid.uuid4().hex)),
+                str(row.get('timestamp', datetime.now(timezone.utc).isoformat(timespec='seconds'))),
+                str(row.get('type', 'unknown')),
+                str(row.get('message', '')),
+                str(row.get('level', 'info')),
+                json.dumps(row.get('details') or {}, ensure_ascii=False)
+            ))
 
 def get_events(limit=50):
-    if not EVENTS_PATH.exists():
-        return []
-    rows = []
-    for line in EVENTS_PATH.read_text(encoding='utf-8').splitlines()[-limit:]:
-        try: rows.append(json.loads(line))
-        except json.JSONDecodeError: continue
-    return list(reversed(rows))
+    with database_connection() as conn:
+        conn.row_factory = sqlite3.Row if not conn.postgres else dict_row
+        rows = conn.execute("""
+            SELECT event_id, timestamp, event_type, message, level, details
+            FROM events
+            ORDER BY sequence DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+    events = []
+    for row in rows:
+        try:
+            details = json.loads(row['details'])
+        except (json.JSONDecodeError, TypeError):
+            details = {}
+        events.append({
+            'id': row['event_id'],
+            'timestamp': row['timestamp'],
+            'type': row['event_type'],
+            'message': row['message'],
+            'level': row['level'],
+            'details': details
+        })
+    return events
+
+def delete_stored_event(event_id):
+    with database_connection() as conn:
+        cursor = conn.execute('DELETE FROM events WHERE event_id = ?', (event_id,))
+        return cursor.rowcount > 0
+
+def migrate_legacy_data():
+    with database_connection() as conn:
+        conn.row_factory = sqlite3.Row if not conn.postgres else dict_row
+        event_row = conn.execute('SELECT COUNT(*) AS count FROM events').fetchone()
+        event_count = event_row['count'] if event_row and isinstance(event_row, dict) else event_row[0]
+    if event_count == 0 and EVENTS_PATH.exists():
+        legacy_events = []
+        for line in EVENTS_PATH.read_text(encoding='utf-8').splitlines():
+            try:
+                legacy_events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        if legacy_events:
+            write_events(legacy_events)
+
+    if not postgres_enabled() or not DB_PATH.exists():
+        return
+    with sqlite3.connect(DB_PATH) as legacy:
+        legacy.row_factory = sqlite3.Row
+        tables = {
+            row['name'] for row in legacy.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        with database_connection() as target:
+            target.row_factory = sqlite3.Row if not target.postgres else dict_row
+            migrations = (
+                ('drivers', 'SELECT username, display_name, password_hash, created_at FROM drivers',
+                 'INSERT INTO drivers (username, display_name, password_hash, created_at) VALUES (?, ?, ?, ?)',
+                 ('username', 'display_name', 'password_hash', 'created_at')),
+                ('driver_updates', 'SELECT created_at, kind, actor_username, actor_display_name, target_username, bus_id, route, status, location, message, authority_delivery, authority_error FROM driver_updates',
+                 'INSERT INTO driver_updates (created_at, kind, actor_username, actor_display_name, target_username, bus_id, route, status, location, message, authority_delivery, authority_error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                 ('created_at', 'kind', 'actor_username', 'actor_display_name', 'target_username', 'bus_id', 'route', 'status', 'location', 'message', 'authority_delivery', 'authority_error')),
+                ('alert_logs', 'SELECT timestamp, vehicle_id, route, event_type, severity, location, message, result, error FROM alert_logs',
+                 'INSERT INTO alert_logs (timestamp, vehicle_id, route, event_type, severity, location, message, result, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                 ('timestamp', 'vehicle_id', 'route', 'event_type', 'severity', 'location', 'message', 'result', 'error'))
+            )
+            for table, select_sql, insert_sql, columns in migrations:
+                if table not in tables:
+                    continue
+                count_row = target.execute(f'SELECT COUNT(*) AS count FROM {table}').fetchone()
+                count = count_row['count'] if isinstance(count_row, dict) else count_row[0]
+                if count:
+                    continue
+                for row in legacy.execute(select_sql).fetchall():
+                    target.execute(insert_sql, tuple(row[column] for column in columns))
+            if 'events' in tables:
+                count_row = target.execute('SELECT COUNT(*) AS count FROM events').fetchone()
+                count = count_row['count'] if isinstance(count_row, dict) else count_row[0]
+                if not count:
+                    for row in legacy.execute(
+                        'SELECT event_id, timestamp, event_type, message, level, details FROM events'
+                    ).fetchall():
+                        target.execute("""
+                            INSERT INTO events (event_id, timestamp, event_type, message, level, details)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, tuple(row[column] for column in (
+                            'event_id', 'timestamp', 'event_type', 'message', 'level', 'details'
+                        )))
 
 @app.get('/')
 def index():
@@ -146,7 +246,7 @@ def driver_login():
         password = request.form.get('password', '')
         if username and password:
             with database_connection() as conn:
-                conn.row_factory = sqlite3.Row
+                conn.row_factory = sqlite3.Row if not conn.postgres else dict_row
                 driver = conn.execute(
                     'SELECT username, display_name, password_hash FROM drivers WHERE username = ?',
                     (username,)
@@ -193,7 +293,7 @@ def authority_provision_driver():
                     datetime.now(timezone.utc).isoformat(timespec='seconds')
                 )
             )
-    except sqlite3.IntegrityError:
+    except (sqlite3.IntegrityError, psycopg.IntegrityError):
         return jsonify(ok=False, error='A driver with this username already exists.'), 409
     return jsonify(ok=True, username=username, display_name=display_name), 201
 
@@ -362,20 +462,8 @@ def output_file(filename):
 
 @app.delete('/api/events/<event_id>')
 def delete_event(event_id):
-    rows=[]
-    deleted = False
-    if EVENTS_PATH.exists():
-        for line in EVENTS_PATH.read_text(encoding='utf-8').splitlines():
-            try:
-                item=json.loads(line)
-                if item.get('id') == event_id:
-                    deleted = True
-                else:
-                    rows.append(item)
-            except json.JSONDecodeError: continue
-    if not deleted:
+    if not delete_stored_event(event_id):
         return jsonify(ok=False, error='Event not found.'), 404
-    write_events(rows)
     return jsonify(ok=True,deleted=True)
 
 @app.delete('/api/events')
@@ -580,9 +668,47 @@ def health():
 
 DB_PATH = DATA_DIR / "tn_transmit.db"
 
+def postgres_enabled():
+    return bool(os.environ.get('DATABASE_URL', '').strip())
+
+class DatabaseConnection:
+    def __init__(self, connection, postgres):
+        self.connection = connection
+        self.postgres = postgres
+
+    @property
+    def row_factory(self):
+        return getattr(self.connection, 'row_factory', None)
+
+    @row_factory.setter
+    def row_factory(self, factory):
+        self.connection.row_factory = factory
+
+    def execute(self, query, parameters=()):
+        if self.postgres:
+            query = query.replace('?', '%s')
+        return self.connection.execute(query, parameters)
+
+    def commit(self):
+        self.connection.commit()
+
+    def rollback(self):
+        self.connection.rollback()
+
+    def close(self):
+        self.connection.close()
+
 @contextmanager
 def database_connection():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+    if postgres_enabled():
+        database_url = os.environ['DATABASE_URL'].strip()
+        if database_url.startswith('postgres://'):
+            database_url = 'postgresql://' + database_url[len('postgres://'):]
+        raw_connection = psycopg.connect(database_url, row_factory=dict_row, connect_timeout=10)
+        conn = DatabaseConnection(raw_connection, postgres=True)
+    else:
+        raw_connection = sqlite3.connect(DB_PATH, timeout=10)
+        conn = DatabaseConnection(raw_connection, postgres=False)
     try:
         yield conn
         conn.commit()
@@ -591,6 +717,12 @@ def database_connection():
         raise
     finally:
         conn.close()
+
+def insert_id(conn, query, parameters):
+    if conn.postgres:
+        row = conn.execute(query.rstrip().rstrip(';') + ' RETURNING id', parameters).fetchone()
+        return row['id']
+    return conn.execute(query, parameters).lastrowid
 
 def init_driver_portal():
     with database_connection() as conn:
@@ -602,9 +734,10 @@ def init_driver_portal():
                 created_at TEXT NOT NULL
             )
         """)
-        conn.execute("""
+        update_id_type = 'BIGSERIAL PRIMARY KEY' if conn.postgres else 'INTEGER PRIMARY KEY AUTOINCREMENT'
+        conn.execute(f"""
             CREATE TABLE IF NOT EXISTS driver_updates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {update_id_type},
                 created_at TEXT NOT NULL,
                 kind TEXT NOT NULL,
                 actor_username TEXT NOT NULL,
@@ -625,12 +758,24 @@ def init_driver_portal():
         conn.execute(
             'CREATE INDEX IF NOT EXISTS idx_driver_assignment ON driver_updates(target_username, kind, id DESC)'
         )
+        event_id_type = 'BIGSERIAL PRIMARY KEY' if conn.postgres else 'INTEGER PRIMARY KEY AUTOINCREMENT'
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS events (
+                sequence {event_id_type},
+                event_id TEXT NOT NULL UNIQUE,
+                timestamp TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                level TEXT NOT NULL,
+                details TEXT NOT NULL
+            )
+        """)
 
 def get_driver(username):
     if not username:
         return None
     with database_connection() as conn:
-        conn.row_factory = sqlite3.Row
+        conn.row_factory = sqlite3.Row if not conn.postgres else dict_row
         row = conn.execute(
             'SELECT username, display_name, password_hash FROM drivers WHERE username = ?',
             (username,)
@@ -641,7 +786,7 @@ def save_shared_update(kind, actor_username, actor_display_name, target_username
                        bus_id, route, status, location, message):
     created_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
     with database_connection() as conn:
-        cursor = conn.execute("""
+        return insert_id(conn, """
             INSERT INTO driver_updates (
                 created_at, kind, actor_username, actor_display_name, target_username,
                 bus_id, route, status, location, message
@@ -650,7 +795,6 @@ def save_shared_update(kind, actor_username, actor_display_name, target_username
             created_at, kind, actor_username, actor_display_name, target_username,
             bus_id, route, status, location, message
         ))
-        return cursor.lastrowid
 
 def update_shared_delivery(update_id, delivery, error=''):
     with database_connection() as conn:
@@ -661,7 +805,7 @@ def update_shared_delivery(update_id, delivery, error=''):
 
 def get_shared_updates(limit=100):
     with database_connection() as conn:
-        conn.row_factory = sqlite3.Row
+        conn.row_factory = sqlite3.Row if not conn.postgres else dict_row
         rows = conn.execute("""
             SELECT id, created_at, kind, actor_username, actor_display_name,
                    target_username, bus_id, route, status, location, message,
@@ -674,7 +818,7 @@ def get_shared_updates(limit=100):
 
 def get_latest_assignment(username):
     with database_connection() as conn:
-        conn.row_factory = sqlite3.Row
+        conn.row_factory = sqlite3.Row if not conn.postgres else dict_row
         row = conn.execute("""
             SELECT bus_id, route, status, message, created_at
             FROM driver_updates
@@ -730,9 +874,10 @@ def forward_driver_update(update_id, username, display_name, bus_id, route,
 
 def init_alert_logs():
     with database_connection() as conn:
-        conn.execute("""
+        alert_id_type = 'BIGSERIAL PRIMARY KEY' if conn.postgres else 'INTEGER PRIMARY KEY AUTOINCREMENT'
+        conn.execute(f"""
             CREATE TABLE IF NOT EXISTS alert_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {alert_id_type},
                 timestamp TEXT NOT NULL,
                 vehicle_id TEXT,
                 route TEXT,
@@ -748,7 +893,7 @@ def init_alert_logs():
 
 def save_alert_log(payload, result, error=None):
     with database_connection() as conn:
-        cursor = conn.execute("""
+        return insert_id(conn, """
             INSERT INTO alert_logs (
                 timestamp, vehicle_id, route, event_type,
                 severity, location, message, result, error
@@ -764,7 +909,6 @@ def save_alert_log(payload, result, error=None):
             result,
             str(error)[:1000] if error else None
         ))
-        return cursor.lastrowid
 
 
 # ---------- DRIVER REPORT API ----------
@@ -889,7 +1033,7 @@ def driver_report():
 @app.get('/api/alert-logs')
 def alert_logs():
     with database_connection() as conn:
-        conn.row_factory = sqlite3.Row
+        conn.row_factory = sqlite3.Row if not conn.postgres else dict_row
         rows = conn.execute("""
             SELECT * FROM alert_logs
             ORDER BY id DESC
@@ -900,8 +1044,11 @@ def alert_logs():
 
 
 # Initialize the database BEFORE starting Flask.
+if os.environ.get('RENDER', '').lower() == 'true' and not postgres_enabled():
+    raise RuntimeError('Set DATABASE_URL to a persistent PostgreSQL database on Render.')
 init_alert_logs()
 init_driver_portal()
+migrate_legacy_data()
 
 
 if __name__ == '__main__':

@@ -34,8 +34,9 @@ python app.py
 1. Push this project to a Git repository. Keep `models/yolov8n.onnx` in the repository; Render needs the model to analyze media.
 2. In Render, choose **New > Blueprint** and select the repository containing `render.yaml`. Render will install `requirements.txt`, start Gunicorn, and check `/health`.
 3. Configure the `AUTHORITY_CALLBACK_TOKEN` when Render prompts for it. The Blueprint generates a persistent `FLASK_SECRET_KEY` and enables secure session cookies.
-4. When the deployment finishes, open the service URL. Driver accounts, updates, event history, uploads, analysis outputs and saved settings are stored under `DATA_DIR`; Render's free service uses ephemeral storage, so they can be lost on restart or redeploy.
-5. To retain accounts and operational data, use a Render plan that supports a persistent disk and set `DATA_DIR` to its mount path (for example, `/var/data`).
+4. Provision a PostgreSQL database in Render and set its connection string in the service as a private `DATABASE_URL` secret. Without it, the app keeps local SQLite fallback only and the dashboard data can still disappear on deploy/restart.
+5. When the deployment finishes, open the service URL. Driver accounts, updates, event history, uploads, analysis outputs and saved settings are stored in the configured database (or SQLite fallback during local development). Render's free service uses ephemeral storage, so data can be lost on restart or redeploy unless PostgreSQL is configured.
+6. If you are using the free plan only, keep local SQLite as a test environment; production persistence requires a managed PostgreSQL service and the `DATABASE_URL` environment variable.
 
 The dashboard requires a driver login. The external transport authority provisions driver accounts through the authenticated API described below. Keep the authority callback token and session secret private. This is a prototype, not a certified passenger-safety system; do not connect it directly to door actuation.
 
