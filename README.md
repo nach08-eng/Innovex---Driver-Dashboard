@@ -45,9 +45,9 @@ The dashboard requires a driver login. The external transport authority provisio
 - Responsive dashboard UI.
 - Upload and preview common video/image files.
 - Save configuration for passenger limit, vehicle ID, CCTV source, and IoT mode/endpoint; set the authority webhook URL/token as Render environment variables.
-- Local event log and API endpoints: `/api/status`, `/api/settings`, `/api/upload`, `/api/alert`, `/api/iot/test`, `/api/events`, `/api/authority/drivers`, `/api/authority/bus-allocation`, `/api/authority/allocations`, `/api/driver/updates`, `/health`.
+- Local event log and API endpoints: `/api/status`, `/api/settings`, `/api/upload`, `/api/alert`, `/api/iot/test`, `/api/events`, `/api/authority/drivers`, `/api/authority/bus-allocation`, `/api/authority/alert-status`, `/api/authority/allocations`, `/api/driver/updates`, `/health`.
 - In-app transport authority notifications for bus allocated and not allocated decisions (polled while the dashboard is open).
-- Authority-provisioned driver accounts, secure password hashes, driver login/logout, status updates shared with all logged-in drivers, and authority webhook delivery status.
+- Authority-provisioned driver accounts, secure password hashes, driver login/logout, shared driver updates, targeted authority alert-status updates, and authority webhook delivery status.
 - Browser-based English and Tamil announcement test buttons.
 - IoT test is mock-only; it does not issue a door movement command.
 
@@ -94,7 +94,7 @@ Use the trash icon on a row to remove one event or **Clear all history** to remo
 
 ### Driver incident reports
 
-The Webhook / API endpoint defaults to `https://transport-authority-dashboard.onrender.com/api/alerts`; this is the authority dashboard's POST-only alert API, not its homepage. Reports include `callback_url`, which points back to the driver's bus-allocation callback. The authority endpoint currently rejects callbacks unless their HTTPS host is in its `DRIVER_STATUS_CALLBACK_HOSTS` allowlist. Add `tn-transmit-smart-crowd-ai.onrender.com` to that environment variable on the transport-authority Render service before reports can be accepted. On this app's Render service, set `AUTHORITY_WEBHOOK_URL` to the endpoint to override deployment-specific config. Add `AUTHORITY_API_TOKEN` only if the authority requires one. Driver accounts cannot change these settings. The webhook receives incident reports and driver status updates; delivery results are logged, and a driver status remains visible in the shared feed even if authority forwarding fails.
+The Webhook / API endpoint defaults to `https://transport-authority-dashboard.onrender.com/api/alerts`; this is the authority dashboard's POST-only alert API, not its homepage. Driver reports identify the signed-in driver and include `callback_url` pointing back to this portal's `/api/authority/alert-status` endpoint. The authority endpoint requires the callback host to be in its `DRIVER_STATUS_CALLBACK_HOSTS` allowlist. Add `tn-transmit-smart-crowd-ai.onrender.com` to that environment variable on the transport-authority Render service before reports can be accepted. Both Render services must have the same `AUTHORITY_CALLBACK_TOKEN`; the authority sends `Authorization: Bearer <token>` on status callbacks. On this app's Render service, set `AUTHORITY_WEBHOOK_URL` to the endpoint to override deployment-specific config. Add `AUTHORITY_API_TOKEN` only if the authority requires one. Driver accounts cannot change these settings. The webhook receives incident reports and driver status updates; delivery results are logged, and a driver status remains visible in the shared feed even if authority forwarding fails.
 
 ### Driver account and shared update API
 

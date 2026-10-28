@@ -49,7 +49,7 @@ $('clear-events').addEventListener('click',async()=>{if(!confirm('Clear all even
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function refreshStatus(){try{const r=await fetch('/api/status');if(!r.ok)throw new Error(`Could not load integration status (HTTP ${r.status})`);const d=await r.json();$('authority-state').textContent=d.authority_configured?'ENDPOINT SAVED':'NOT CONFIGURED';$('authority-state').classList.toggle('ready',d.authority_configured);$('iot-state').textContent=d.iot_mode.toUpperCase()+' MODE';$('cctv-state').textContent=d.cctv_configured?'SOURCE SAVED':'NOT CONFIGURED';$('cctv-state').classList.toggle('ready',d.cctv_configured)}catch(e){console.error(e);toast(e.message)}}
 $('refresh-events').addEventListener('click',refreshEvents);refreshStatus();
-const driverStatusLabels={on_the_way:'On the way',at_stop:'At stop',delayed:'Delayed',needs_assistance:'Needs assistance',situation:'Situation update',allocated:'Bus allocated',not_allocated:'Bus not allocated'};
+const driverStatusLabels={on_the_way:'On the way',at_stop:'At stop',delayed:'Delayed',needs_assistance:'Needs assistance',situation:'Situation update',allocated:'Bus allocated',not_allocated:'Bus not allocated',ACKNOWLEDGED:'Alert acknowledged',RESOLVED:'Alert resolved'};
 async function refreshDriverUpdates(){
   try{
     const response=await fetch('/api/driver/updates',{cache:'no-store'});
@@ -65,7 +65,7 @@ async function refreshDriverUpdates(){
       const delivery=update.kind==='driver_status'
         ? `<span class="delivery-state ${esc(update.authority_delivery)}" title="${esc(update.authority_error||'')}">Authority: ${esc(update.authority_delivery)}</span>`
         : '<span class="delivery-state">Transport authority</span>';
-      return `<article class="driver-update-item ${update.kind==='bus_allocation'?'authority-update':''}"><div class="driver-update-item-head"><b>${esc(label)}</b><time>${esc(new Date(update.created_at).toLocaleString())}</time></div><p>${esc(update.message)}</p><small>${esc(update.actor_display_name)}${update.actor_username?` · @${esc(update.actor_username)}`:''}</small>${delivery}</article>`;
+      return `<article class="driver-update-item ${['bus_allocation','alert_status'].includes(update.kind)?'authority-update':''}"><div class="driver-update-item-head"><b>${esc(label)}</b><time>${esc(new Date(update.created_at).toLocaleString())}</time></div><p>${esc(update.message)}</p><small>${esc(update.actor_display_name)}${update.actor_username?` · @${esc(update.actor_username)}`:''}</small>${delivery}</article>`;
     }).join(''):'<div class="empty-events">No driver or authority updates yet.</div>';
     const newestId=updates.reduce((max,update)=>Math.max(max,Number(update.id)||0),0);
     if(!driverFeedInitialized){

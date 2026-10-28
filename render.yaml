@@ -18,4 +18,4 @@ services:
       - key: AUTHORITY_CALLBACK_TOKEN
         sync: false
       - key: DRIVER_STATUS_CALLBACK_URL
-        value: https://tn-transmit-smart-crowd-ai.onrender.com/api/authority/bus-allocation
+        value: https://tn-transmit-smart-crowd-ai.onrender.com/api/authority/alert-status

@@ -46,7 +46,8 @@ app.config['UPLOAD_FOLDER'] = str(UPLOAD_DIR)
 def require_driver_login():
     public_endpoints = {
         'static', 'driver_login', 'driver_logout', 'health',
-        'authority_provision_driver', 'authority_bus_allocation'
+        'authority_provision_driver', 'authority_bus_allocation',
+        'authority_alert_status'
     }
     if request.endpoint in public_endpoints or session.get('driver_username'):
         return None
@@ -80,7 +81,7 @@ DEFAULT_CONFIG = {
     'bus_id': 'TN-TRANSMIT-DEMO-01',
     'driver_status_callback_url': os.environ.get(
         'DRIVER_STATUS_CALLBACK_URL',
-        'https://tn-transmit-smart-crowd-ai.onrender.com/api/authority/bus-allocation'
+        'https://tn-transmit-smart-crowd-ai.onrender.com/api/authority/alert-status'
     ).strip()
 }
 
@@ -564,6 +565,77 @@ def authority_bus_allocation():
     )
     return jsonify(ok=True, event_id=event['id'], update_id=update_id, status=payload['status']), 201
 
+@app.post('/api/authority/alert-status')
+def authority_alert_status():
+    authenticated, failure = authority_request_is_authenticated()
+    if not authenticated:
+        return failure
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or payload.get('event') != 'alert.status.updated':
+        return jsonify(ok=False, error='A valid alert status update is required.'), 400
+
+    raw_driver_username = payload.get('driver_username')
+    driver_username = normalize_driver_username(raw_driver_username) if raw_driver_username else ''
+    if raw_driver_username and not driver_username:
+        return jsonify(ok=False, error='A valid driver_username is required.'), 400
+    driver = get_driver(driver_username) if driver_username else None
+    if driver_username and not driver:
+        return jsonify(ok=False, error='Driver account not found.'), 404
+
+    status = payload.get('status')
+    status_labels = {
+        'ACKNOWLEDGED': 'Alert acknowledged by transport authority',
+        'RESOLVED': 'Alert resolved by transport authority'
+    }
+    if status not in status_labels:
+        return jsonify(ok=False, error='Status must be ACKNOWLEDGED or RESOLVED.'), 400
+
+    alert_id = payload.get('alert_id')
+    if not isinstance(alert_id, (str, int)) or not str(alert_id).strip():
+        return jsonify(ok=False, error='alert_id is required.'), 400
+    alert_id = str(alert_id).strip()[:100]
+    vehicle_id = str(payload.get('vehicle_id') or '').strip()[:80]
+    event_id = str(payload.get('event_id') or '').strip()[:100]
+    route = str(payload.get('route') or '').strip()[:100]
+    updated_at = str(payload.get('updated_at') or '').strip()[:80]
+    summary = (
+        f'{status_labels[status]}: #{alert_id}'
+        if driver_username else f'Alert #{alert_id}: {status_labels[status].lower()}'
+    )
+    if event_id:
+        summary += f' · Event {event_id}'
+    if vehicle_id:
+        summary += f' · Bus {vehicle_id}'
+    if route:
+        summary += f' · Route {route}'
+
+    update_id = save_shared_update(
+        kind='alert_status',
+        actor_username='',
+        actor_display_name='Transport authority',
+        target_username=driver_username,
+        bus_id=vehicle_id,
+        route=route,
+        status=status,
+        location='',
+        message=summary
+    )
+    event = log_event(
+        'authority_alert_status',
+        summary,
+        'info',
+        {
+            'update_id': update_id,
+            'alert_id': alert_id,
+            'event_id': event_id,
+            'driver_username': driver_username,
+            'status': status,
+            'updated_at': updated_at
+        }
+    )
+    return jsonify(ok=True, update_id=update_id, event_id=event['id'], status=status), 201
+
 @app.get('/api/authority/allocations')
 def authority_allocations():
     allocation_events = [
@@ -574,8 +646,9 @@ def authority_allocations():
 
 @app.get('/api/driver/updates')
 def driver_updates():
-    updates = get_shared_updates()
-    assignment = get_latest_assignment(session['driver_username'])
+    username = session['driver_username']
+    updates = get_shared_updates(username=username)
+    assignment = get_latest_assignment(username)
     return jsonify(
         updates=updates,
         assignment=assignment,
@@ -803,7 +876,7 @@ def update_shared_delivery(update_id, delivery, error=''):
             (delivery, error[:1000], update_id)
         )
 
-def get_shared_updates(limit=100):
+def get_shared_updates(username, limit=100):
     with database_connection() as conn:
         conn.row_factory = sqlite3.Row if not conn.postgres else dict_row
         rows = conn.execute("""
@@ -811,9 +884,10 @@ def get_shared_updates(limit=100):
                    target_username, bus_id, route, status, location, message,
                    authority_delivery, authority_error
             FROM driver_updates
+            WHERE target_username = '' OR target_username = ?
             ORDER BY id DESC
             LIMIT ?
-        """, (limit,)).fetchall()
+        """, (username, limit)).fetchall()
     return [dict(row) for row in rows]
 
 def get_latest_assignment(username):
@@ -954,6 +1028,9 @@ def driver_report():
     try:
         authority_payload = {
             **payload,
+            'source': 'driver',
+            'driver_username': session['driver_username'],
+            'driver_name': session['driver_display_name'],
             'callback_url': cfg['driver_status_callback_url']
         }
         body = json.dumps(authority_payload).encode('utf-8')
